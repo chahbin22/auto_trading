@@ -1,3 +1,4 @@
+
 import argparse
 import csv
 from datetime import datetime
@@ -10,6 +11,7 @@ from storage import FIELDS, candle_path, candle_time
 
 
 MOMENTUM_PERIOD = 20
+RSI_PERIOD = 14
 FIRST_TRADE_INDEX = MOMENTUM_PERIOD + 1
 
 
@@ -58,7 +60,31 @@ def momentum_signal(prices):
     return prices[-1] > prices[-1 - MOMENTUM_PERIOD]
 
 
-def run_backtest(candles, initial_cash, fee_rate, signal=sma_signal):
+def calculate_rsi(prices):
+    changes = [current - previous for previous, current in zip(prices, prices[1:])]
+    seed = changes[:RSI_PERIOD]
+    average_gain = sum(max(change, 0) for change in seed) / RSI_PERIOD
+    average_loss = sum(max(-change, 0) for change in seed) / RSI_PERIOD
+
+    for change in changes[RSI_PERIOD:]:
+        average_gain = (average_gain * (RSI_PERIOD - 1) + max(change, 0)) / RSI_PERIOD
+        average_loss = (average_loss * (RSI_PERIOD - 1) + max(-change, 0)) / RSI_PERIOD
+
+    if average_loss == 0:
+        return 50.0 if average_gain == 0 else 100.0
+    return 100 * average_gain / (average_gain + average_loss)
+
+
+def rsi_signal(prices):
+    rsi = calculate_rsi(prices)
+    if rsi <= 30:
+        return True
+    if rsi >= 70:
+        return False
+    return None
+
+
+def run_backtest(candles, initial_cash, fee_rate, signal=sma_signal, start_index=FIRST_TRADE_INDEX):
     cash = initial_cash
     shares = 0.0
     closing_prices = []
@@ -67,15 +93,15 @@ def run_backtest(candles, initial_cash, fee_rate, signal=sma_signal):
     trades = []
 
     for index, (timestamp, opening, closing) in enumerate(candles):
-        if index >= FIRST_TRADE_INDEX:
+        if index >= start_index:
             target_holding = signal(closing_prices)
-            if target_holding and shares == 0:
+            if target_holding is True and shares == 0:
                 notional = cash / (1 + fee_rate)
                 fee = cash - notional
                 shares = notional / opening
                 cash = 0.0
                 trades.append((candles[index - 1][0], timestamp, "BUY", opening, shares, fee))
-            elif not target_holding and shares > 0:
+            elif target_holding is False and shares > 0:
                 notional = shares * opening
                 fee = notional * fee_rate
                 cash = notional - fee
@@ -90,8 +116,8 @@ def run_backtest(candles, initial_cash, fee_rate, signal=sma_signal):
     return equity, max_drawdown, trades, shares
 
 
-def run_buy_and_hold(candles, initial_cash, fee_rate):
-    evaluation_candles = candles[FIRST_TRADE_INDEX:]
+def run_buy_and_hold(candles, initial_cash, fee_rate, start_index=FIRST_TRADE_INDEX):
+    evaluation_candles = candles[start_index:]
     first_open = evaluation_candles[0][1]
     shares = initial_cash / (1 + fee_rate) / first_open
     peak = initial_cash
@@ -126,14 +152,14 @@ def print_comparison(initial_cash, results):
             cells.append(text + padding if column == 0 else padding + text)
         print(" | ".join(cells))
         if index == 0:
-                print("-+-".join("-" * width for width in widths))
+            print("-+-".join("-" * width for width in widths))
 
 
 TRADE_FIELDS = (
     "symbol", "status", "entry_signal_at", "entry_at", "exit_signal_at", "exit_at",
     "entry_price_usd", "exit_price_usd", "quantity", "entry_fee_usd", "exit_fee_usd",
     "net_pnl_usd", "net_return_pct", "profitable",
-)
+            )
 
 
 def export_sma_trades(path, symbol, trades):
@@ -171,7 +197,7 @@ def export_sma_trades(path, symbol, trades):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="저장한 미국주식 일봉으로 세 전략 비교")
+    parser = argparse.ArgumentParser(description="저장한 미국주식 일봉으로 네 전략 비교")
     parser.add_argument("symbol", choices=("IONQ", "RXRX", "BBAI"))
     parser.add_argument("--csv", type=Path, help="별도 CSV 경로")
     parser.add_argument("--from", dest="start", help="첫 체결 가능 봉의 ISO 8601 시각")
@@ -191,6 +217,7 @@ def main():
             raise ValueError("--fee-bps는 0 이상 10000 미만이어야 합니다.")
         candles = load_validated_candles(args.csv or candle_path(args.symbol), through)
         validated_count = len(candles)
+        evaluation_start = FIRST_TRADE_INDEX
         if args.start is not None:
             start = datetime.fromisoformat(args.start)
             if start.utcoffset() is None:
@@ -203,17 +230,24 @@ def main():
                 raise ValueError("--from 이후 평가할 일봉이 없습니다.")
             if first_index < FIRST_TRADE_INDEX:
                 raise ValueError("--from 이전에 지표 계산용 일봉 21개가 필요합니다.")
-            candles = candles[first_index - FIRST_TRADE_INDEX:]
+            evaluation_start = first_index
     except (OSError, ValueError, csv.Error) as error:
         parser.exit(1, f"데이터 검사 실패 | {error}\n")
 
     fee_rate = args.fee_bps / 10_000
-    equity, drawdown, trades, shares = run_backtest(candles, args.cash, fee_rate)
-    momentum_equity, momentum_drawdown, momentum_trades, _ = run_backtest(
-        candles, args.cash, fee_rate, signal=momentum_signal
+    equity, drawdown, trades, shares = run_backtest(
+        candles, args.cash, fee_rate, start_index=evaluation_start
     )
-    benchmark_equity, benchmark_drawdown = run_buy_and_hold(candles, args.cash, fee_rate)
-    print(f"{args.symbol} | 검증 통과 {validated_count}개 | 첫 체결 가능 봉 {candles[FIRST_TRADE_INDEX][0].isoformat()}")
+    momentum_equity, momentum_drawdown, momentum_trades, _ = run_backtest(
+        candles, args.cash, fee_rate, signal=momentum_signal, start_index=evaluation_start
+    )
+    rsi_equity, rsi_drawdown, rsi_trades, _ = run_backtest(
+        candles, args.cash, fee_rate, signal=rsi_signal, start_index=evaluation_start
+    )
+    benchmark_equity, benchmark_drawdown = run_buy_and_hold(
+        candles, args.cash, fee_rate, start_index=evaluation_start
+    )
+    print(f"{args.symbol} | 검증 통과 {validated_count}개 | 첫 체결 가능 봉 {candles[evaluation_start][0].isoformat()}")
     print(f"마지막 평가 봉 {candles[-1][0].isoformat()} | 편도 비용 {args.fee_bps:g}bp")
     print("SMA(5/20) 거래 내역")
     for signal, filled, side, price, quantity, fee in trades:
@@ -232,6 +266,7 @@ def main():
         [
             ("SMA(5/20)", equity, drawdown, len(trades)),
             ("20거래일 모멘텀", momentum_equity, momentum_drawdown, len(momentum_trades)),
+            ("RSI(14) 30/70", rsi_equity, rsi_drawdown, len(rsi_trades)),
             ("매수 후 보유", benchmark_equity, benchmark_drawdown, 1),
         ],
     )
