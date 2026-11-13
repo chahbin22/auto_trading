@@ -85,9 +85,12 @@ def rsi_signal(prices):
     return None
 
 
-def run_backtest(candles, initial_cash, fee_rate, signal=sma_signal, start_index=FIRST_TRADE_INDEX):
-    cash = initial_cash
-    shares = 0.0
+def run_backtest(
+    candles, initial_cash, fee_rate, signal=sma_signal, start_index=FIRST_TRADE_INDEX,
+    *, initial_shares=0.0,
+):
+    cash = 0.0 if initial_shares else initial_cash
+    shares = initial_shares
     closing_prices = []
     peak = initial_cash
     max_drawdown = 0.0
@@ -230,7 +233,13 @@ def export_ridge_daily(path, rows):
 
 
 def ridge_predictions(candles, validation_start, evaluation_start):
+    return model_predictions(candles, validation_start, evaluation_start)
+
+
+def model_predictions(candles, validation_start, evaluation_start, *, boosted=False):
+    name = "GBRT" if boosted else "Ridge"
     try:
+        from sklearn.ensemble import GradientBoostingRegressor
         from sklearn.linear_model import Ridge
         from sklearn.pipeline import make_pipeline
         from sklearn.preprocessing import StandardScaler
@@ -266,7 +275,7 @@ def ridge_predictions(candles, validation_start, evaluation_start):
     ]
     evaluation = [index for index in features if index + 1 >= evaluation_start]
     if len(training) < 2 or not validation or len(evaluation) < 2:
-        raise ValueError("Ridge에는 학습 표본 2개, 검증 표본 1개, 평가 봉 2개 이상이 필요합니다.")
+        raise ValueError(f"{name}에는 학습 표본 2개, 검증 표본 1개, 평가 봉 2개 이상이 필요합니다.")
 
     train_x = [features[index] for index in training]
     train_y = [labels[index] for index in training]
@@ -274,9 +283,22 @@ def ridge_predictions(candles, validation_start, evaluation_start):
 
     best_error = float("inf")
     best_model = None
-    best_alpha = None
-    for alpha in (0.1, 1.0, 10.0, 100.0):
-        model = make_pipeline(StandardScaler(), Ridge(alpha=alpha))
+    best_settings = None
+    if boosted:
+        candidates = [
+            (f"depth={depth}, trees={count}", GradientBoostingRegressor(
+                max_depth=depth, n_estimators=count, learning_rate=0.05,
+                min_samples_leaf=20, random_state=0,
+            ))
+            for depth in (1, 2)
+            for count in (25, 75)
+        ]
+    else:
+        candidates = [
+            (f"alpha={alpha:g}", make_pipeline(StandardScaler(), Ridge(alpha=alpha)))
+            for alpha in (0.1, 1.0, 10.0, 100.0)
+        ]
+    for settings, model in candidates:
         model.fit(train_x, train_y)
         errors = [
             (actual - predicted) ** 2
@@ -287,7 +309,7 @@ def ridge_predictions(candles, validation_start, evaluation_start):
         error = fmean(errors)
         if error < best_error:
             best_error = error
-            best_alpha = alpha
+            best_settings = settings
             best_model = model
 
     estimates = best_model.predict([features[index] for index in evaluation])
@@ -296,7 +318,7 @@ def ridge_predictions(candles, validation_start, evaluation_start):
     squared_error = sum((labels[index] - predictions[index]) ** 2 for index in scored)
     zero_error = sum(labels[index] ** 2 for index in scored)
     score = 1 - squared_error / zero_error if zero_error else None
-    print(f"Ridge | alpha={best_alpha:g} | 학습 {len(training)}개"
+    print(f"{name} | {best_settings} | 학습 {len(training)}개"
           f" | 검증 {len(validation)}개 | 평가 정답 {len(scored)}개")
     print(f"표본 외 R² (0% 기준) {score:.4f}" if score is not None
           else "표본 외 R² (0% 기준) 계산 불가")
