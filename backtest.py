@@ -1,8 +1,8 @@
-
 import argparse
 import csv
 from datetime import datetime
 from math import isfinite
+from statistics import fmean, pstdev
 from pathlib import Path
 from unicodedata import east_asian_width
 
@@ -15,7 +15,7 @@ RSI_PERIOD = 14
 FIRST_TRADE_INDEX = MOMENTUM_PERIOD + 1
 
 
-def load_validated_candles(path, through):
+def load_validated_candles(path, through, *, include_volume=False):
     with path.open(encoding="utf-8", newline="") as csv_file:
         reader = csv.DictReader(csv_file)
         if not set(FIELDS).issubset(reader.fieldnames or []):
@@ -45,7 +45,8 @@ def load_validated_candles(path, through):
                     raise ValueError("거래량 또는 통화가 올바르지 않습니다.")
             except (TypeError, ValueError) as error:
                 raise ValueError(f"CSV {reader.line_num}행 | {error}") from error
-            candles.append((timestamp, opening, closing))
+            candle = (timestamp, opening, closing)
+            candles.append((*candle, volume) if include_volume else candle)
 
     if len(candles) <= FIRST_TRADE_INDEX:
         raise ValueError("모멘텀 신호와 다음 봉 체결을 위해 일봉 22개 이상이 필요합니다.")
@@ -162,7 +163,7 @@ TRADE_FIELDS = (
             )
 
 
-def export_sma_trades(path, symbol, trades):
+def export_round_trips(path, symbol, trades):
     with path.open("w", encoding="utf-8", newline="") as output:
         writer = csv.DictWriter(output, fieldnames=TRADE_FIELDS)
         writer.writeheader()
@@ -196,8 +197,114 @@ def export_sma_trades(path, symbol, trades):
             writer.writerow(row)
 
 
+def ridge_daily_rows(candles, predictions, trades):
+    fills = {filled_at: side for _, filled_at, side, *_ in trades}
+    holding = False
+    for index, predicted in predictions.items():
+        applied_at, opening, _ = candles[index + 1]
+        fill = fills.get(applied_at, "")
+        if fill:
+            holding = fill == "BUY"
+        actual = (
+            candles[index + 2][1] / opening - 1
+            if index + 2 < len(candles) else ""
+        )
+        yield (candles[index][0].isoformat(), applied_at.isoformat(),
+               predicted, actual, int(holding), fill)
+
+
+def write_csv_output(path, input_path, write_output):
+    if path.resolve() == input_path.resolve() or (
+        path.exists() and path.samefile(input_path)
+    ):
+        raise OSError("일봉 입력 CSV와 출력 CSV가 같은 파일입니다.")
+    write_output(path)
+
+
+def export_ridge_daily(path, rows):
+    with path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.writer(output)
+        writer.writerow(("signal_at", "applied_at", "predicted_return",
+                         "actual_open_to_open_return", "holding_after_open", "fill"))
+        writer.writerows(rows)
+
+
+def ridge_predictions(candles, validation_start, evaluation_start):
+    try:
+        from sklearn.linear_model import Ridge
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as error:
+        raise ValueError("Ridge 실행에는 python -m pip install scikit-learn이 필요합니다.") from error
+
+    opens = [candle[1] for candle in candles]
+    closes = [candle[2] for candle in candles]
+    turnover = [candle[2] * candle[3] for candle in candles]
+    returns = [current / previous - 1 for previous, current in zip(closes, closes[1:])]
+
+    # 키는 신호 봉의 인덱스다. 각 신호는 다음 봉 시가에 적용된다.
+    features = {}
+    for index in range(MOMENTUM_PERIOD, len(candles) - 1):
+        average_turnover = fmean(turnover[index - 19:index + 1])
+        features[index] = [
+            closes[index] / closes[index - 5] - 1,
+            closes[index] / closes[index - 20] - 1,
+            pstdev(returns[index - 20:index]),
+            turnover[index] / average_turnover if average_turnover else 0.0,
+        ]
+
+    labels = {
+        index: opens[index + 2] / opens[index + 1] - 1
+        for index in features
+        if index + 2 < len(candles)
+    }
+    # 구간 경계에서는 정답의 마지막 시가까지 해당 구간 안에 있어야 한다.
+    training = [index for index in labels if index + 2 < validation_start]
+    validation = [
+        index for index in labels
+        if index + 1 >= validation_start and index + 2 < evaluation_start
+    ]
+    evaluation = [index for index in features if index + 1 >= evaluation_start]
+    if len(training) < 2 or not validation or len(evaluation) < 2:
+        raise ValueError("Ridge에는 학습 표본 2개, 검증 표본 1개, 평가 봉 2개 이상이 필요합니다.")
+
+    train_x = [features[index] for index in training]
+    train_y = [labels[index] for index in training]
+    validation_x = [features[index] for index in validation]
+
+    best_error = float("inf")
+    best_model = None
+    best_alpha = None
+    for alpha in (0.1, 1.0, 10.0, 100.0):
+        model = make_pipeline(StandardScaler(), Ridge(alpha=alpha))
+        model.fit(train_x, train_y)
+        errors = [
+            (actual - predicted) ** 2
+            for actual, predicted in zip(
+                (labels[index] for index in validation), model.predict(validation_x)
+            )
+        ]
+        error = fmean(errors)
+        if error < best_error:
+            best_error = error
+            best_alpha = alpha
+            best_model = model
+
+    estimates = best_model.predict([features[index] for index in evaluation])
+    predictions = dict(zip(evaluation, map(float, estimates)))
+    scored = [index for index in evaluation if index in labels]
+    squared_error = sum((labels[index] - predictions[index]) ** 2 for index in scored)
+    zero_error = sum(labels[index] ** 2 for index in scored)
+    score = 1 - squared_error / zero_error if zero_error else None
+    print(f"Ridge | alpha={best_alpha:g} | 학습 {len(training)}개"
+          f" | 검증 {len(validation)}개 | 평가 정답 {len(scored)}개")
+    print(f"표본 외 R² (0% 기준) {score:.4f}" if score is not None
+          else "표본 외 R² (0% 기준) 계산 불가")
+    return predictions
+
+
 def main():
-    parser = argparse.ArgumentParser(description="저장한 미국주식 일봉으로 네 전략 비교")
+    parser = argparse.ArgumentParser(description="저장한 미국주식 일봉으로 전략 비교")
     parser.add_argument("symbol", choices=("IONQ", "RXRX", "BBAI"))
     parser.add_argument("--csv", type=Path, help="별도 CSV 경로")
     parser.add_argument("--from", dest="start", help="첫 체결 가능 봉의 ISO 8601 시각")
@@ -205,7 +312,12 @@ def main():
     parser.add_argument("--cash", type=float, default=10_000)
     parser.add_argument("--fee-bps", type=float, default=10, help="편도 비용, 1bp = 0.01%%")
     parser.add_argument("--export-trades", action="store_true", help="SMA 거래를 종목별 CSV로 저장")
+    parser.add_argument("--ridge-validation-from", help="Ridge 검증 첫 체결 봉의 ISO 8601 시각. --from 필요")
+    parser.add_argument("--export-ridge", action="store_true", help="Ridge 거래 및 일별 예측 CSV 저장")
     args = parser.parse_args()
+    if args.export_ridge and args.ridge_validation_from is None:
+        parser.error("--export-ridge에는 --ridge-validation-from이 필요합니다.")
+    input_path = args.csv or candle_path(args.symbol)
 
     try:
         through = datetime.fromisoformat(args.through)
@@ -215,7 +327,11 @@ def main():
             raise ValueError("--cash는 양수여야 합니다.")
         if not 0 <= args.fee_bps < 10_000:
             raise ValueError("--fee-bps는 0 이상 10000 미만이어야 합니다.")
-        candles = load_validated_candles(args.csv or candle_path(args.symbol), through)
+        use_ridge = args.ridge_validation_from is not None
+        raw_candles = load_validated_candles(
+            input_path, through, include_volume=use_ridge
+        )
+        candles = [candle[:3] for candle in raw_candles] if use_ridge else raw_candles
         validated_count = len(candles)
         evaluation_start = FIRST_TRADE_INDEX
         if args.start is not None:
@@ -231,6 +347,18 @@ def main():
             if first_index < FIRST_TRADE_INDEX:
                 raise ValueError("--from 이전에 지표 계산용 일봉 21개가 필요합니다.")
             evaluation_start = first_index
+
+        predictions = None
+        if use_ridge:
+            if args.start is None:
+                raise ValueError("Ridge 평가 시작일을 --from으로 지정하세요.")
+            validation_date = datetime.fromisoformat(args.ridge_validation_from)
+            if validation_date.utcoffset() is None or validation_date >= start:
+                raise ValueError("Ridge 검증 시작일은 시간대를 포함하고 --from보다 앞서야 합니다.")
+            validation_start = next(
+                index for index, candle in enumerate(candles) if candle[0] >= validation_date
+            )
+            predictions = ridge_predictions(raw_candles, validation_start, evaluation_start)
     except (OSError, ValueError, csv.Error) as error:
         parser.exit(1, f"데이터 검사 실패 | {error}\n")
 
@@ -261,29 +389,46 @@ def main():
     print(f"SMA 진입 {entry_count}건 | 청산 완료 {closed_count}건"
           f" | 미청산 {entry_count - closed_count}건")
     print("\n전략 비교")
-    print_comparison(
-        args.cash,
-        [
-            ("SMA(5/20)", equity, drawdown, len(trades)),
-            ("20거래일 모멘텀", momentum_equity, momentum_drawdown, len(momentum_trades)),
-            ("RSI(14) 30/70", rsi_equity, rsi_drawdown, len(rsi_trades)),
-            ("매수 후 보유", benchmark_equity, benchmark_drawdown, 1),
-        ],
-    )
+    results = [
+        ("SMA(5/20)", equity, drawdown, len(trades)),
+        ("20거래일 모멘텀", momentum_equity, momentum_drawdown, len(momentum_trades)),
+        ("RSI(14) 30/70", rsi_equity, rsi_drawdown, len(rsi_trades)),
+        ("매수 후 보유", benchmark_equity, benchmark_drawdown, 1),
+    ]
+    if predictions is not None:
+        def ridge_signal(closing_prices):
+            return predictions[len(closing_prices) - 1] > 0
 
-    if args.export_trades:
-        path = Path(f"{args.symbol}_sma_trades.csv")
-        input_path = args.csv or candle_path(args.symbol)
-        try:
-            if path.resolve() == input_path.resolve() or (
-                path.exists() and path.samefile(input_path)
-            ):
-                raise OSError("일봉 입력 CSV와 거래 출력 CSV가 같은 파일입니다.")
-            export_sma_trades(path, args.symbol, trades)
-        except OSError as error:
-            parser.exit(1, f"거래 CSV 저장 실패 | {error}\n")
-        print(f"SMA 거래 CSV 저장 | {path}")
+        ridge_equity, ridge_drawdown, ridge_trades, _ = run_backtest(
+            candles, args.cash, fee_rate, signal=ridge_signal, start_index=evaluation_start
+        )
+        results.append(("Ridge", ridge_equity, ridge_drawdown, len(ridge_trades)))
 
+    print_comparison(args.cash, results)
+
+    if predictions is not None:
+        daily_rows = list(ridge_daily_rows(candles, predictions, ridge_trades))
+        held = sum(row[4] for row in daily_rows)
+        print(f"Ridge 시가 체결 후 보유 | {held}/{len(daily_rows)}거래일"
+              f" ({held / len(daily_rows):.2%})")
+
+    try:
+        if args.export_trades:
+            path = Path(f"{args.symbol}_sma_trades.csv")
+            write_csv_output(path, input_path,
+                             lambda target: export_round_trips(target, args.symbol, trades))
+            print(f"SMA 거래 CSV 저장 | {path}")
+
+        if args.export_ridge:
+            path = Path(f"{args.symbol}_ridge_trades.csv")
+            write_csv_output(path, input_path,
+                             lambda target: export_round_trips(target, args.symbol, ridge_trades))
+            print(f"Ridge 거래 CSV 저장 | {path}")
+            path = Path(f"{args.symbol}_ridge_daily.csv")
+            write_csv_output(path, input_path, lambda target: export_ridge_daily(target, daily_rows))
+            print(f"Ridge 일별 예측 CSV 저장 | {path}")
+    except OSError as error:
+        parser.exit(1, f"CSV 저장 실패 | {error}\n")
 
 
 if __name__ == "__main__":
