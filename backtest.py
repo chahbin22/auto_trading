@@ -9,7 +9,7 @@ from unicodedata import east_asian_width
 from indicators import calculate_sma
 from storage import FIELDS, candle_path, candle_time
 
-
+RESULTS_DIR = Path(__file__).resolve().parent / "results" / "backtest"
 MOMENTUM_PERIOD = 20
 RSI_PERIOD = 14
 FIRST_TRADE_INDEX = MOMENTUM_PERIOD + 1
@@ -217,6 +217,7 @@ def ridge_daily_rows(candles, predictions, trades):
 
 
 def write_csv_output(path, input_path, write_output):
+    path.parent.mkdir(parents=True,exist_ok=True)
     if path.resolve() == input_path.resolve() or (
         path.exists() and path.samefile(input_path)
     ):
@@ -436,17 +437,17 @@ def main():
 
     try:
         if args.export_trades:
-            path = Path(f"{args.symbol}_sma_trades.csv")
+            path = RESULTS_DIR / f"{args.symbol}_sma_trades.csv"
             write_csv_output(path, input_path,
                              lambda target: export_round_trips(target, args.symbol, trades))
             print(f"SMA 거래 CSV 저장 | {path}")
 
         if args.export_ridge:
-            path = Path(f"{args.symbol}_ridge_trades.csv")
+            path = RESULTS_DIR / f"{args.symbol}_ridge_trades.csv"
             write_csv_output(path, input_path,
                              lambda target: export_round_trips(target, args.symbol, ridge_trades))
             print(f"Ridge 거래 CSV 저장 | {path}")
-            path = Path(f"{args.symbol}_ridge_daily.csv")
+            path = RESULTS_DIR / f"{args.symbol}_ridge_daily.csv"
             write_csv_output(path, input_path, lambda target: export_ridge_daily(target, daily_rows))
             print(f"Ridge 일별 예측 CSV 저장 | {path}")
     except OSError as error:

@@ -1,0 +1,167 @@
+{
+  "start": "2026-11-12T00:00:00+09:00",
+  "shares": {
+    "IONQ": 124.124066,
+    "RXRX": 1160.0,
+    "BBAI": 292.0
+  },
+  "fee_bps": 10,
+  "initial_equity": 8622.99120322,
+  "sessions": [
+    {
+      "bar_at": "2026-11-12T14:00:00+09:00",
+      "symbols": {
+        "IONQ": {
+          "close": 30.86,
+          "rsi": 44.443771770904696,
+          "signal": null,
+          "fill": null,
+          "shares": 124.124066,
+          "cash": 0.0
+        },
+        "RXRX": {
+          "close": 3.33,
+          "rsi": 41.80824132354365,
+          "signal": null,
+          "fill": null,
+          "shares": 1160.0,
+          "cash": 0.0
+        },
+        "BBAI": {
+          "close": 2.07,
+          "rsi": 38.030191727758805,
+          "signal": null,
+          "fill": null,
+          "shares": 292.0,
+          "cash": 0.0
+        }
+      },
+      "paper_equity": 8297.70867676,
+      "hold_equity": 8297.70867676
+    },
+    {
+      "bar_at": "2026-11-13T14:00:00+09:00",
+      "symbols": {
+        "IONQ": {
+          "close": 30.6,
+          "rsi": 43.94816680899794,
+          "signal": null,
+          "fill": null,
+          "shares": 124.124066,
+          "cash": 0.0
+        },
+        "RXRX": {
+          "close": 3.36,
+          "rsi": 42.47233405268328,
+          "signal": null,
+          "fill": null,
+          "shares": 1160.0,
+          "cash": 0.0
+        },
+        "BBAI": {
+          "close": 2.09,
+          "rsi": 38.92157161704816,
+          "signal": null,
+          "fill": null,
+          "shares": 292.0,
+          "cash": 0.0
+        }
+      },
+      "paper_equity": 8306.0764196,
+      "hold_equity": 8306.0764196
+    },
+    {
+      "bar_at": "2026-11-16T14:00:00+09:00",
+      "symbols": {
+        "IONQ": {
+          "close": 26.45,
+          "rsi": 37.055520062062314,
+          "signal": null,
+          "fill": null,
+          "shares": 124.124066,
+          "cash": 0.0
+        },
+        "RXRX": {
+          "close": 2.905,
+          "rsi": 35.677849206049395,
+          "signal": null,
+          "fill": null,
+          "shares": 1160.0,
+          "cash": 0.0
+        },
+        "BBAI": {
+          "close": 1.82,
+          "rsi": 32.02604372549689,
+          "signal": null,
+          "fill": null,
+          "shares": 292.0,
+          "cash": 0.0
+        }
+      },
+      "paper_equity": 7184.3215457,
+      "hold_equity": 7184.3215457
+    },
+    {
+      "bar_at": "2026-11-17T14:00:00+09:00",
+      "symbols": {
+        "IONQ": {
+          "close": 24.84,
+          "rsi": 34.711647438323475,
+          "signal": null,
+          "fill": null,
+          "shares": 124.124066,
+          "cash": 0.0
+        },
+        "RXRX": {
+          "close": 2.72,
+          "rsi": 33.329627802931626,
+          "signal": null,
+          "fill": null,
+          "shares": 1160.0,
+          "cash": 0.0
+        },
+        "BBAI": {
+          "close": 1.8,
+          "rsi": 31.575978008046487,
+          "signal": null,
+          "fill": null,
+          "shares": 292.0,
+          "cash": 0.0
+        }
+      },
+      "paper_equity": 6764.04179944,
+      "hold_equity": 6764.04179944
+    },
+    {
+      "bar_at": "2026-11-18T14:00:00+09:00",
+      "symbols": {
+        "IONQ": {
+          "close": 23.48,
+          "rsi": 32.822974552835205,
+          "signal": null,
+          "fill": null,
+          "shares": 124.124066,
+          "cash": 0.0
+        },
+        "RXRX": {
+          "close": 2.825,
+          "rsi": 35.908004823479736,
+          "signal": null,
+          "fill": null,
+          "shares": 1160.0,
+          "cash": 0.0
+        },
+        "BBAI": {
+          "close": 1.75,
+          "rsi": 30.424844489414777,
+          "signal": null,
+          "fill": null,
+          "shares": 292.0,
+          "cash": 0.0
+        }
+      },
+      "paper_equity": 6702.433069680001,
+      "hold_equity": 6702.433069680001
+    }
+  ]
+}
