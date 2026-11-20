@@ -5,3 +5,8 @@ data/
 *_daily.csv
 *_sma_trades.csv
 .DS_Store
+paper_rsi_ledger.json
+paper_rsi_ledger.json.lock
+.paper-rsi-refresh.lock
+.paper-rsi-refresh.log
+.paper-rsi-status
