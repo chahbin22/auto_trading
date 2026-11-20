@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    ".venv": true,
+    ".paper-rsi": true,
+    ".paper-rsi-*.lock": true,
+    ".paper-rsi-refresh.log": true,
+    ".paper-rsi-status": true,
+    "paper_rsi_ledger.json": true,
+    "paper_rsi_ledger.json.lock": true
+  }
+}

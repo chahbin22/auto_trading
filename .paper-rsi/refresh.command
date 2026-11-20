@@ -9,7 +9,7 @@ else
   python=venv/bin/python3
 fi
 printf '\n[%s]\n' "$(date '+%F %T %Z')" >> "$log"
-if "$python" paper_rsi_refresh.py >> "$log" 2>&1; then
+if "$python" paper_rsi_notify.py >> "$log" 2>&1; then
   result="갱신 성공"
   code=0
 else
